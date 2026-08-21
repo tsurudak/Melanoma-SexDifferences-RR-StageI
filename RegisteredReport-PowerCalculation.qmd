@@ -1,0 +1,412 @@
+---
+title: "Power Calculation - Melanoma sex differences"
+author: "Kaitlyn Tsuruda"
+date: "`r Sys.Date()`"
+format: gfm
+toc: true
+---
+
+## About
+
+This document performs the power calculations presented in *Sex-disparities in survival after anti-PD-1 monotherapy for advanced melanoma in Norway: a population-based cohort study \[Registered Report - stage I\].*
+
+For all analyses, we assume that the distribution of age, sex and melanoma-specific death will be the same as reported in [Reis Costa D, Winge-Main AK, Skog A, Tsuruda KM, Robsahm TE, Kulle Andreassen B. From trials to practice: Immune checkpoint inhibitor therapy for melanoma patients in Norway. Acta Oncol. 2024;63:965-73.](https://doi.org/10.2340/1651-226X.2024.41266) We therefore use the data prepared from this publication in our power calculations, which contains information about cutaneous melanoma diagnoses until the end of 2021. These data cannot be shared publicly due to privacy restrictions.
+
+## Set up
+
+We use the `powerSurvEpi` package for this calculation, which provides functions for power and sample size calculations for survival analyses in epidemiological studies using Cox proportional hazards regression models.
+
+```{r setup, output = FALSE}
+
+library(cowplot)
+library(data.table)
+library(ggplot2)
+library(here)
+library(knitr)
+library(powerSurvEpi)
+library(sessioninfo)
+library(tidyverse)
+
+setwd(here())
+
+```
+
+## Hypothesis 1.1 (patients with stage III/IV melanoma treated with first line anti-PD-1 monotherapy)
+
+The analyses associated with hypothesis 1.1 will quantify sex-based survival disparities among those treated in the ICI period (2016-2024). We hypothesize that females will have higher net survival than males.
+
+This analysis will include patients diagnosed with advanced cutaneous melanoma who were \>=18 years old when treated with first-line palliative anti-PD-1 monotherapy during 2016-2024.
+
+```{r ICI_dat}
+
+load("./Data/rwdPop1L.RData")
+
+#Check only one observation in dataset per person
+nrow(idImmFirstCM) == nrow(distinct(idImmFirstCM, PID)) 
+
+#dataset already includes patients with advanced melanoma treated with 1L ICI, so
+#keep data for patients >= 18, treated with anti-PD-1 monotherapy during 2016-2021
+ICI_dat <- idImmFirstCM %>% 
+      filter(ALDER >= 18) %>% 
+      filter(between(yrFirstImm, 2016, 2021)) %>% 
+      filter(eventtype == "Nivo" | eventtype == "Pemb") 
+```
+
+There were `r nrow(ICI_dat)` patients with advanced melanoma and treated with first line palliative anti-PD-1 monotherapy during 2016-2021. The annual number of patients starting 1L treatment was as follows:
+
+```{r ICI_dat-annualcounts, echo = FALSE}
+
+kable(
+  ICI_dat |> 
+  group_by(yrFirstImm) |> 
+  tally() |> 
+  spread(yrFirstImm, n)
+)
+
+```
+
+Overall, we estimate that we will include the `r nrow(ICI_dat)` patients described above, plus an additional 125 patients per year from 2022-2024, for a total of `r nrow(ICI_dat) + (125*3)` patients in our planned analyses.
+
+### Power calculation
+
+We perform power calculations for various combinations of
+
+-   sample size (1200 to 2000, by intervals of 10)
+
+-   observed HR (1.15, 1.2, 1.3, 1.4, and 1.5)
+
+-   probability of death (60% or 70%)
+
+These calculations assume the use of a Cox proportional hazards regression model with 2 covariates. The first covariate is our exposure of interest, sex, and for the other we will use age.
+
+```{r power_calculation_1.1}
+#vector for sample sizes under consideration
+n_vector <- seq(1200, 2000, by = 10)
+
+set.seed(29307648) #19037
+#create numeric variable for sex and "fail" variables with 60 or 70% prevalance 
+ICI_dat <- ICI_dat %>% mutate(sex = case_when(KJOENN == "M" ~ 0,
+                                      KJOENN == "K" ~ 1),
+                      fail60 = rbinom(nrow(ICI_dat), size = 1, p = 0.6),
+                      fail70 = rbinom(nrow(ICI_dat), size = 1, p = 0.7))
+  
+
+#check prevalence in failure variables
+kable(
+summarize(ICI_dat, 
+          n = n(), 
+          mean_fail60 = mean(fail60), 
+          mean_fail70 = mean(fail70)
+          )
+)
+
+
+#60% mortality
+for(beta in c(1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5)){
+  assign(paste0("power1_HR", beta), 
+           powerEpi(ICI_dat$sex, 
+                   ICI_dat$ALDER, 
+                   failureFlag = ICI_dat$fail60,
+                   n = n_vector,
+                   theta = beta,
+                   alpha = 0.05)$power)
+}
+
+  
+powerdat60_1 <-as.data.frame(cbind(n_vector, 
+                               power1_HR1.1,
+                               power1_HR1.15, 
+                               power1_HR1.2, 
+                               power1_HR1.25))
+
+powerdat_long60_1 <- powerdat60_1 %>% 
+                  pivot_longer(!n_vector, names_to = "HR") %>% 
+                  mutate(HR = str_remove(HR, "power1_HR"),
+                         Mortality = "60%")
+
+#70% mortality
+for(beta in c(1.1, 1.15, 1.2, 1.25, 1.3, 1.4, 1.5)){
+  assign(paste0("power1_HR", beta), 
+           powerEpi(ICI_dat$sex, 
+                   ICI_dat$ALDER, 
+                   failureFlag = ICI_dat$fail70,
+                   n = n_vector,
+                   theta = beta,
+                   alpha = 0.05)$power)
+}
+
+  
+powerdat70_1 <-as.data.frame(cbind(n_vector, 
+                               power1_HR1.1,
+                               power1_HR1.15, 
+                               power1_HR1.2, 
+                               power1_HR1.25))
+
+powerdat_long70_1 <- powerdat70_1 %>% 
+                  pivot_longer(!n_vector, names_to = "HR") %>% 
+                  mutate(HR = str_remove(HR, "power1_HR"),
+                         Mortality = "70%")
+
+```
+
+```{r power_plot_1.1}
+
+#combine power calculation data based on assumption of 60% and 70% mortality 
+plot_dat1 <- rbind(powerdat_long60_1, powerdat_long70_1)
+
+plot1.1 <- ggplot(data = plot_dat1, aes(x = n_vector, 
+                                    y = value, 
+                                    color = HR,
+                                    linetype = Mortality)) +
+          geom_line(linewidth = 1) +
+          geom_hline(yintercept = 0.8) +
+          ylab("Power") +
+          xlab("Sample size") +
+          ggtitle("Primary hypothesis 1.1") +
+          scale_y_continuous(breaks = seq(0.0, 1, by = 0.2), 
+                             expand = c(0, 0),
+                             limits = c(0, 1)) +
+          scale_x_continuous(breaks = seq(1200, 2000, by = 100),
+                             limits = c(1200, 2000)) +
+          theme_bw(base_size = 13)
+plot1.1
+
+```
+
+We have `r  powerEpi(ICI_dat$sex,           ICI_dat$ALDER,           failureFlag = ICI_dat$fail70,          n = 1575,          theta = 1.192,          alpha = 0.05)$power*100`% power to detect an effect size of 1.193 for 1575 patients with 70% mortality.
+
+And `r  powerEpi(ICI_dat$sex,           ICI_dat$ALDER,           failureFlag = ICI_dat$fail60,          n = 1575,          theta = 1.21,          alpha = 0.05)$power*100`% power to detect an effect size of 1.2 for 1575 patients with 60% mortality.
+
+## Hypothesis 1.3 (patients diagnosed with primary stage IV melanoma)
+
+The analyses associated with hypothesis 1.3 will quantify sex-based survival disparities among those treated in the pre-ICI period (2010-2013) vs in the ICI era (2016-2024). We hypothesize that any sex-based survival disparity in net survival will be smaller among patients treated with anti-PD-1 monotherapy in the ICI period compared to those treated in the pre-ICI period.
+
+This analysis will include patients diagnosed with stage IV cutaneous melanoma who were \>=18 years old at diagnosis during the period 2010-2013 and 2016-2024.
+
+### Pre-ICI period (2010-2013)
+
+First we identify adult stage IV patients diagnosed during 2010-2013.
+
+```{r preICI_dat}
+
+load("./Data/krgAdvC43.RData")
+
+#select and count stage 4 patients >= 18yo, diagnosed 2010-2013
+dat_Stage4_preICI <- idKrgAdv %>% 
+      select(PID, new_PID, stage, DIAG_AAR,
+             KJOENN, causeDeath, ALDER,  
+             STATUS_AAR, STATUS2D, status ) %>% 
+      filter(stage %in% "IV") %>% 
+      filter(ALDER >= 18) %>% 
+      filter(between(DIAG_AAR, 2010, 2013)) %>% 
+      mutate(eventtype = "", #create variables to match those found in postICI data
+             FirstLineTreat = "",
+             drugFirstLine = "")
+
+#check only one observation per person
+nrow(dat_Stage4_preICI) == nrow(distinct(dat_Stage4_preICI, PID))
+```
+
+There were `r nrow(dat_Stage4_preICI)` stage IV patients diagnosed in 2010-2013.
+
+### ICI period (2016-2021)
+
+Next we identify adult stage IV patients diagnosed in 2016-2021 and treated with first line anti-PD-1 monotherapy (pembrolizumab or nivolumab).
+
+```{r postICI_dat}
+
+load("./Data/dataTreatAdvC43.RData")
+
+
+#select stage 4 patients diagnosed in 2016-2021 and with ICI tx
+dat_Stage4_postICI <- dataTreat %>% 
+      select(PID, new_PID, stage, DIAG_AAR, 
+             KJOENN, causeDeath, ALDER,
+             STATUS_AAR, STATUS2D, status,
+             eventtype, FirstLineTreat, drugFirstLine) %>% 
+      filter(stage %in% "IV") %>% 
+      filter(ALDER >= 18) %>% 
+      filter(between(DIAG_AAR, 2016, 2021)) %>%
+      filter(FirstLineTreat == "Immun" &
+            (drugFirstLine == "Pemb" | drugFirstLine == "Nivo"))
+
+
+#data are in long format (more than one observation per unique PID)
+nrow(dat_Stage4_postICI) == nrow(distinct(dat_Stage4_postICI, PID))
+
+
+#Check how many distinct patients are in the file
+nrow(distinct(dat_Stage4_postICI, PID))
+
+
+#take first observation per person 
+dat_Stage4_postICI <- dat_Stage4_postICI %>% 
+              group_by(PID) %>% 
+              filter(row_number() == 1)
+```
+
+There were `r nrow(dat_Stage4_postICI)` stage IV patients diagnosed in 2016-2021 and treated with first line anti-PD-1 monotherapy. The annual number of cases was as follows:
+
+```{r postICI_dat-annualcounts, echo = FALSE}
+
+kable(
+  dat_Stage4_postICI |> 
+  group_by(DIAG_AAR) |> 
+  tally() |> 
+  spread(DIAG_AAR, n)
+)
+
+```
+
+### Combined data (2010-2013 and 2016-2021)
+
+```{r combine_dat}
+
+#combining pre- and post- ICI period data
+dat_stage4 <- rbind(dat_Stage4_preICI, dat_Stage4_postICI)
+
+```
+
+Overall, we estimate that we will include `r nrow(dat_stage4)` patients diagnosed in 2010-2013 and 2016-2021, plus an additional 40 patients per year from 2022-2024, for a total of `r   nrow(dat_Stage4_preICI) + nrow(dat_Stage4_postICI) + 120` patients in our planned analyses.
+
+### Power calculation
+
+We perform power calculations for various combinations of
+
+-   sample size (400 to 600, by intervals of 10)
+
+-   observed HR (1.15, 1.2, 1.3, 1.4, and 1.5)
+
+-   probability of death (60% or 70%)
+
+These calculations assume the use of a Cox proportional hazards regression model with 2 covariates. The first covariate is our exposure of interest, sex, and for the other we will use age.
+
+```{r power_calculation_1.3}
+
+#vector for sample sizes under consideration
+n_vector <- seq(400, 600, by = 10)
+
+
+set.seed(109)
+#create numeric variable for sex and "fail" variables with 60 or 70% prevalance 
+dat_stage4 <- dat_stage4 %>% mutate(sex = case_when(KJOENN == "M" ~ 0,
+                                                    KJOENN == "K" ~ 1),
+                      fail60 = rbinom(nrow(dat_stage4), size = 1, p = 0.6),
+                      fail70 = rbinom(nrow(dat_stage4), size = 1, p = 0.7))
+
+
+#check prevalence in failure variables
+kable(
+summarize(dat_stage4, 
+          n = n(), 
+          mean_fail60 = mean(fail60), 
+          mean_fail70 = mean(fail70)
+          )
+)
+
+
+# power calculations for 60% mortality for various HRs and sample sizes
+for(beta in c(1.15, 1.2, 1.3, 1.4, 1.5)){
+  assign(paste0("power_HR", beta), 
+           powerEpi(dat_stage4$sex, 
+                   dat_stage4$ALDER, 
+                   failureFlag = dat_stage4$fail60,
+                   n = n_vector,
+                   theta = beta,
+                   alpha = 0.05)$power)
+}
+
+powerdat60 <-as.data.frame(cbind(n_vector,
+                               power_HR1.15, 
+                               power_HR1.2, 
+                               power_HR1.3,
+                               power_HR1.4,
+                               power_HR1.5))
+
+powerdat_long60 <- powerdat60 %>% 
+                  pivot_longer(!n_vector, names_to = "HR") %>% 
+                  mutate(HR = str_remove(HR, "power_HR"),
+                         Mortality = "60%")
+
+
+# power calculations for 70% mortality for various HRs and sample sizes
+for(beta in c(1.15, 1.2, 1.3, 1.4, 1.5)){
+  assign(paste0("power_HR", beta), 
+           powerEpi(dat_stage4$sex, 
+                   dat_stage4$ALDER, 
+                   failureFlag = dat_stage4$fail70,
+                   n = n_vector,
+                   theta = beta,
+                   alpha = 0.05)$power)
+}
+
+powerdat70 <-as.data.frame(cbind(n_vector,  
+                               power_HR1.15, 
+                               power_HR1.2, 
+                               power_HR1.3,
+                               power_HR1.4,
+                               power_HR1.5))
+
+powerdat_long70 <- powerdat70 %>% 
+                  pivot_longer(!n_vector, names_to = "HR") %>% 
+                  mutate(HR = str_remove(HR, "power_HR"),
+                         Mortality = "70%")
+
+```
+
+```{r power_plot_1.3}
+
+#combine power calculation data based on assumption of 60% and 70% mortality 
+plot_dat <- rbind(powerdat_long60, powerdat_long70)
+
+
+plot1.3 <- ggplot(data = plot_dat, aes(x = n_vector, 
+                                    y = value, 
+                                    color = HR,
+                                    linetype = Mortality)) +
+          geom_line(linewidth = 1) +
+          geom_hline(yintercept = 0.8) +
+          ylab("Power") +
+          xlab("Sample size") +
+          ggtitle("Primary hypothesis 1.3") +
+          scale_y_continuous(breaks = seq(0.0, 1, by = 0.2), 
+                             expand = c(0, 0),
+                             limits = c(0, 1)) +
+          scale_x_continuous(breaks = seq(400, 600, by = 50),
+                             limits = c(400, 600)) +
+          theme_bw(base_size = 13)
+plot1.3
+
+```
+
+We have `r  powerEpi(dat_stage4$sex,                     dat_stage4$ALDER,                     failureFlag = dat_stage4$fail70,                    n = 485,                    theta = 1.38,                    alpha = 0.05)$power*100`% power to detect an effect size of 1.38 for 485 patients with 70% mortality.
+
+And `r  powerEpi(dat_stage4$sex,                     dat_stage4$ALDER,                     failureFlag = dat_stage4$fail60,                    n = 485,                    theta = 1.42,                    alpha = 0.05)$power*100`% power to detect an effect size of 1.42 for 485 patients with 60% mortality.
+
+## Figure included in supplemental material (Appendix A8)
+
+```{r final_fig}
+
+finalplot <- plot_grid(plot1.1, plot1.3,
+                       ncol = 2, 
+                       labels = c("A", "B"), 
+                       label_size = 15)
+finalplot
+
+ggsave(plot = finalplot,
+       filename = "./PowerCalculation.png",
+       width = 14,
+       height = 6 ,
+       units = "in",
+       dpi = 300)
+```
+
+## Session and citation information
+
+```{r session_info}
+
+session_info()
+
+citation("powerSurvEpi")
+
+```
